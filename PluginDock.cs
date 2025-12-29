@@ -3924,6 +3924,16 @@ internal sealed partial class PluginDockController : IDisposable
 
         try
         {
+            var bundledIcon = TryResolveBundledIconPath();
+            if (!string.IsNullOrWhiteSpace(bundledIcon) && File.Exists(bundledIcon))
+                return fallbackPluginIcon = DService.Texture.GetFromFileAbsolute(bundledIcon);
+        }
+        catch
+        {
+        }
+
+        try
+        {
             var assetsDir = DService.PI.DalamudAssetDirectory.FullName;
             var defaultIcon = Path.Combine(assetsDir, "3", "UIRes", "defaultIcon.png");
             if (!File.Exists(defaultIcon))
@@ -3946,6 +3956,28 @@ internal sealed partial class PluginDockController : IDisposable
         catch
         {
             return fallbackPluginIcon = DService.Texture.GetFromGameIcon(new GameIconLookup(1));
+        }
+    }
+
+    private static string? TryResolveBundledIconPath()
+    {
+        try
+        {
+            var assemblyLocation = DService.PI.AssemblyLocation;
+            var baseDir = assemblyLocation.DirectoryName ?? string.Empty;
+            if (baseDir.Length == 0)
+                return null;
+
+            var candidate = Path.Combine(baseDir, "images", "icon.png");
+            if (File.Exists(candidate))
+                return candidate;
+
+            candidate = Path.Combine(baseDir, "icon.png");
+            return File.Exists(candidate) ? candidate : null;
+        }
+        catch
+        {
+            return null;
         }
     }
 
