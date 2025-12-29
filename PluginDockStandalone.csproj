@@ -14,4 +14,8 @@
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
   </ItemGroup>
+
+  <Target Name="CopyDockIconToOutput" AfterTargets="Build">
+    <Copy SourceFiles="images\icon.png" DestinationFiles="$(OutputPath)icon.png" SkipUnchangedFiles="true" />
+  </Target>
 </Project>

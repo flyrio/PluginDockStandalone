@@ -68,6 +68,10 @@ internal sealed partial class PluginDockController : IDisposable
     private int requestOpenOverlayConfigDelayFrames;
     private double dockAutoCollapseAtTime;
     private bool dockAnchorDirty;
+    private bool dockDragging;
+    private bool dockDragMoved;
+    private Vector2 dockDragStartMouse;
+    private Vector2 dockDragStartAnchor;
 
     private readonly Dictionary<string, string> localIconPathCache = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, Task> iconDownloadTasks = new(StringComparer.OrdinalIgnoreCase);
@@ -2946,26 +2950,59 @@ internal sealed partial class PluginDockController : IDisposable
             dockAnchorDirty = true;
         }
 
-        var isMoving = !ModuleConfig.LockPosition &&
-                       ImGui.IsMouseDown(ImGuiMouseButton.Left) &&
-                       ImGui.IsWindowHovered(ImGuiHoveredFlags.RootAndChildWindows);
-
-        if (isMoving)
-        {
-            ModuleConfig.DockAnchor = windowPos + headerLocalPos;
-            dockAnchorDirty = true;
-            return;
-        }
+        var isDragging = UpdateDockDragState();
 
         var desiredWindowPos = ModuleConfig.DockAnchor - headerLocalPos;
         if (Vector2.DistanceSquared(windowPos, desiredWindowPos) > 0.25f)
             ImGui.SetWindowPos(desiredWindowPos, ImGuiCond.Always);
 
-        if (dockAnchorDirty)
+        if (!isDragging && dockAnchorDirty)
         {
             dockAnchorDirty = false;
             SaveConfig(ModuleConfig);
         }
+    }
+
+    private bool UpdateDockDragState()
+    {
+        if (ModuleConfig.LockPosition)
+        {
+            dockDragging = false;
+            dockDragMoved = false;
+            return false;
+        }
+
+        var hovered = ImGui.IsWindowHovered(ImGuiHoveredFlags.RootAndChildWindows | ImGuiHoveredFlags.AllowWhenBlockedByActiveItem);
+        if (!dockDragging)
+        {
+            if (hovered && ImGui.IsMouseClicked(ImGuiMouseButton.Left))
+            {
+                dockDragging = true;
+                dockDragMoved = false;
+                dockDragStartMouse = ImGui.GetMousePos();
+                dockDragStartAnchor = ModuleConfig.DockAnchor;
+            }
+
+            return false;
+        }
+
+        if (!ImGui.IsMouseDown(ImGuiMouseButton.Left))
+        {
+            dockDragging = false;
+            return false;
+        }
+
+        var delta = ImGui.GetMousePos() - dockDragStartMouse;
+        var threshold = MathF.Max(ImGui.GetIO().MouseDragThreshold, 1f);
+        if (!dockDragMoved && delta.LengthSquared() >= threshold * threshold)
+            dockDragMoved = true;
+
+        if (!dockDragMoved)
+            return false;
+
+        ModuleConfig.DockAnchor = dockDragStartAnchor + delta;
+        dockAnchorDirty = true;
+        return true;
     }
 
     private void HandleAutoHideAfterExpand()
@@ -3004,17 +3041,21 @@ internal sealed partial class PluginDockController : IDisposable
         var size = new Vector2(ModuleConfig.IconSize, ModuleConfig.IconSize);
         var clicked = false;
 
-        if (ModuleConfig.TransparentButtons)
-            PushTransparentIconButtonStyle();
-
         var headerIcon = GetFallbackPluginIcon();
-        if (headerIcon.TryGetWrap(out var wrap, out _))
-            clicked = ImGui.ImageButton(wrap.Handle, size);
-        else
-            clicked = ImGui.Button("PD", size);
+        if (headerIcon.TryGetWrap(out var wrap, out _) && wrap != null)
+        {
+            if (ModuleConfig.TransparentButtons)
+                PushTransparentIconButtonStyle();
 
-        if (ModuleConfig.TransparentButtons)
-            PopTransparentIconButtonStyle();
+            clicked = ImGui.ImageButton(wrap.Handle, size);
+
+            if (ModuleConfig.TransparentButtons)
+                PopTransparentIconButtonStyle();
+        }
+        else
+        {
+            clicked = DrawDockHeaderFallbackIcon(size);
+        }
 
         if (ImGui.IsItemHovered())
         {
@@ -3063,6 +3104,54 @@ internal sealed partial class PluginDockController : IDisposable
         }
 
         ImGui.PopID();
+    }
+
+    private static bool DrawDockHeaderFallbackIcon(Vector2 size)
+    {
+        var clicked = ImGui.InvisibleButton("dock_header_fallback", size);
+        var drawList = ImGui.GetWindowDrawList();
+        var min = ImGui.GetItemRectMin();
+        var max = ImGui.GetItemRectMax();
+
+        var rounding = MathF.Max(2f, size.X * 0.16f);
+        var bg = ImGui.GetColorU32(new Vector4(0.10f, 0.22f, 0.26f, 0.95f));
+        var border = ImGui.GetColorU32(new Vector4(0.55f, 0.85f, 0.88f, 0.9f));
+        drawList.AddRectFilled(min, max, bg, rounding);
+        drawList.AddRect(min, max, border, rounding);
+
+        var pad = size.X * 0.18f;
+        var square = size.X * 0.18f;
+        var gap = size.X * 0.08f;
+        var topY = min.Y + pad;
+        var squareColor = ImGui.GetColorU32(new Vector4(0.92f, 0.70f, 0.25f, 1f));
+
+        for (var i = 0; i < 3; i++)
+        {
+            var x = min.X + pad + i * (square + gap);
+            drawList.AddRectFilled(new Vector2(x, topY), new Vector2(x + square, topY + square), squareColor, 2f);
+        }
+
+        var barTop = min.Y + size.Y * 0.58f;
+        var barColor = ImGui.GetColorU32(new Vector4(0.08f, 0.53f, 0.63f, 1f));
+        drawList.AddRectFilled(
+            new Vector2(min.X + pad, barTop),
+            new Vector2(max.X - pad, max.Y - pad * 0.7f),
+            barColor,
+            rounding * 0.6f);
+
+        if (ImGui.IsItemHovered())
+        {
+            var hover = ImGui.GetColorU32(new Vector4(1f, 1f, 1f, 0.12f));
+            drawList.AddRectFilled(min, max, hover, rounding);
+        }
+
+        if (ImGui.IsItemActive())
+        {
+            var active = ImGui.GetColorU32(new Vector4(1f, 1f, 1f, 0.2f));
+            drawList.AddRectFilled(min, max, active, rounding);
+        }
+
+        return clicked;
     }
 
     private void DrawOneCommandDockItem(DockItem item)
