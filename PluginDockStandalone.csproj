@@ -1,0 +1,11 @@
+﻿<Project Sdk="Dalamud.CN.NET.Sdk/14.0.1">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Version>1.0.0.0</Version>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+</Project>
