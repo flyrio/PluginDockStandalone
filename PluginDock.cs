@@ -12,6 +12,7 @@ using Dalamud.Bindings.ImGui;
 using Dalamud.Configuration;
 using Dalamud.Game.Text;
 using Dalamud.Game.Command;
+using Dalamud.Interface.ImGuiFileDialog;
 using Dalamud.Interface.Textures;
 using Dalamud.Interface.Windowing;
 using Dalamud.Plugin;
@@ -37,6 +38,7 @@ internal sealed partial class PluginDockController : IDisposable
     private const string CommandName = "/pdock";
     private Config ModuleConfig = null!;
     private readonly WindowSystem windowSystem = new("PluginDockStandalone");
+    private readonly FileDialogManager fileDialogManager = new();
     private DockOverlayWindow? Overlay;
     private PluginDockConfigWindow? ConfigWindow;
     private bool initialized;
@@ -231,6 +233,14 @@ internal sealed partial class PluginDockController : IDisposable
             if (ImGui.Checkbox("图标无按钮底色", ref transparentButtons))
             {
                 ModuleConfig.TransparentButtons = transparentButtons;
+                SaveConfig(ModuleConfig);
+            }
+            
+            var dockHeaderIconPath = ModuleConfig.DockHeaderIconPath ?? string.Empty;
+            if (DrawDockTextInputWithPicker("悬浮窗图标路径", "仅支持绝对路径。留空=使用默认图标。", "##dock_header_icon_path", ref dockHeaderIconPath, 260, "浏览", "##dock_header_icon_pick", OpenDockHeaderIconPicker))
+            {
+                var trimmed = dockHeaderIconPath.Trim();
+                ModuleConfig.DockHeaderIconPath = string.IsNullOrWhiteSpace(trimmed) ? null : trimmed;
                 SaveConfig(ModuleConfig);
             }
 
@@ -1093,6 +1103,7 @@ internal sealed partial class PluginDockController : IDisposable
             ApplyPendingImGuiWindowFocusRequests();
             DrawImGuiMetricsWindow();
             DrawIconLibraryWindow();
+            fileDialogManager.Draw();
         }
         catch (Exception ex)
         {
@@ -2385,6 +2396,44 @@ internal sealed partial class PluginDockController : IDisposable
         return changed;
     }
 
+    private void OpenDockHeaderIconPicker()
+    {
+        var startPath = ResolveDockHeaderIconPickerStartPath();
+        fileDialogManager.OpenFileDialog(
+            "选择悬浮窗图标",
+            "图片{.png,.jpg,.jpeg}",
+            (success, paths) =>
+            {
+                if (!success || paths.Count == 0)
+                    return;
+
+                var picked = paths[0].Trim();
+                if (picked.Length == 0)
+                    return;
+
+                ModuleConfig.DockHeaderIconPath = picked;
+                SaveConfig(ModuleConfig);
+            },
+            1,
+            startPath);
+    }
+
+    private string? ResolveDockHeaderIconPickerStartPath()
+    {
+        var current = ModuleConfig.DockHeaderIconPath?.Trim() ?? string.Empty;
+        if (current.Length == 0)
+            return null;
+
+        if (Directory.Exists(current))
+            return current;
+
+        if (!Path.IsPathRooted(current))
+            return null;
+
+        var dir = Path.GetDirectoryName(current);
+        return !string.IsNullOrWhiteSpace(dir) && Directory.Exists(dir) ? dir : null;
+    }
+
     private void DrawPinnedEditor(IReadOnlyList<IExposedPlugin> plugins)
     {
         if (ModuleConfig.Items.Count == 0)
@@ -3041,7 +3090,7 @@ internal sealed partial class PluginDockController : IDisposable
         var size = new Vector2(ModuleConfig.IconSize, ModuleConfig.IconSize);
         var clicked = false;
 
-        var headerIcon = GetFallbackPluginIcon();
+        var headerIcon = GetDockHeaderIcon();
         if (headerIcon.TryGetWrap(out var wrap, out _) && wrap != null)
         {
             if (ModuleConfig.TransparentButtons)
@@ -3918,6 +3967,25 @@ internal sealed partial class PluginDockController : IDisposable
             return false;
 
         return Convert.ToInt32(icon) != 0;
+    }
+
+    private ISharedImmediateTexture GetDockHeaderIcon()
+    {
+        var customPath = ModuleConfig.DockHeaderIconPath?.Trim() ?? string.Empty;
+        if (customPath.Length > 0)
+        {
+            if (Path.IsPathRooted(customPath) && File.Exists(customPath))
+            {
+                if (textureCache.TryGetValue(customPath, out var cached))
+                    return cached;
+
+                var texture = DService.Texture.GetFromFileAbsolute(customPath);
+                textureCache[customPath] = texture;
+                return texture;
+            }
+        }
+
+        return GetFallbackPluginIcon();
     }
 
     private ISharedImmediateTexture GetIconForCommand(DockItem item)

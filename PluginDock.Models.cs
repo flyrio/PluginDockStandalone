@@ -58,6 +58,7 @@ internal sealed partial class PluginDockController
         public bool TransparentButtons = true;
         public float IconSize = 32f;
         public float IconSpacing = 4f;
+        public string? DockHeaderIconPath;
         public int MaxIconsPerRow = 0;
         public DockExpandDirection ExpandDirection = DockExpandDirection.Right;
         public DockWrapDirection WrapDirection = DockWrapDirection.Down;
