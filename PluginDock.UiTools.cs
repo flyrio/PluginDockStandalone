@@ -524,13 +524,24 @@ internal sealed partial class PluginDockController
         imGuiWindowNameCache.Clear();
         imGuiWindowNameCacheError = string.Empty;
 
-        if (!TryGetImGuiIniText(out var iniText, out var error))
+        var results = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var iniError = string.Empty;
+
+        if (TryGetImGuiIniText(out var iniText, out var error))
+            results.UnionWith(ParseImGuiWindowNamesFromIni(iniText));
+        else
+            iniError = error;
+
+        if (results.Count == 0)
+            CollectImGuiWindowNamesFromContext(results);
+
+        if (results.Count == 0 && !string.IsNullOrWhiteSpace(iniError))
         {
-            imGuiWindowNameCacheError = error;
+            imGuiWindowNameCacheError = iniError;
             return;
         }
 
-        imGuiWindowNameCache.AddRange(ParseImGuiWindowNamesFromIni(iniText));
+        imGuiWindowNameCache.AddRange(results.OrderBy(x => x, StringComparer.OrdinalIgnoreCase));
     }
 
     private static bool TryGetImGuiIniText(out string iniText, out string error)
@@ -664,6 +675,45 @@ internal sealed partial class PluginDockController
         }
 
         return results.OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToList();
+    }
+
+    private static unsafe void CollectImGuiWindowNamesFromContext(HashSet<string> results)
+    {
+        if (results == null)
+            return;
+
+        try
+        {
+            var ctxPtr = ImGuiNative.GetCurrentContext();
+            if (ctxPtr == null)
+                return;
+
+            var ctx = new ImGuiContextPtr(ctxPtr);
+            if (ctx.IsNull)
+                return;
+
+            ref var windows = ref ctx.Windows;
+            for (var i = 0; i < windows.Size; i++)
+            {
+                var window = windows[i];
+                if (window.Handle == null)
+                    continue;
+
+                var namePtr = window.Name;
+                if (namePtr == null)
+                    continue;
+
+                var name = System.Runtime.InteropServices.Marshal.PtrToStringUTF8((IntPtr)namePtr) ?? string.Empty;
+                name = name.Trim();
+                if (name.Length == 0)
+                    continue;
+
+                results.Add(name);
+            }
+        }
+        catch
+        {
+        }
     }
 
 }
