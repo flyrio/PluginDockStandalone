@@ -2304,6 +2304,35 @@ internal sealed partial class PluginDockController : IDisposable
     private static float CalcSmallButtonWidth(string label) =>
         ImGui.CalcTextSize(label).X + ImGui.GetStyle().FramePadding.X * 2f;
 
+    private static int GetValidUtf8Length(byte[] bytes, int maxLength)
+    {
+        var length = Math.Min(bytes.Length, maxLength);
+
+        // 确保不会截断在 UTF-8 多字节字符的中间
+        if (length > 0 && length < bytes.Length)
+        {
+            // 从 length-1 向前扫描，跳过所有续字节 (10xxxxxx)
+            var pos = length - 1;
+            while (pos > 0 && (bytes[pos] & 0xC0) == 0x80)
+                pos--;
+
+            // 现在 pos 指向一个非续字节（可能是 ASCII 或多字节起始）
+            var b = bytes[pos];
+            int charLen;
+            if ((b & 0x80) == 0) charLen = 1;           // ASCII: 0xxxxxxx
+            else if ((b & 0xE0) == 0xC0) charLen = 2;   // 2字节: 110xxxxx
+            else if ((b & 0xF0) == 0xE0) charLen = 3;   // 3字节: 1110xxxx
+            else if ((b & 0xF8) == 0xF0) charLen = 4;   // 4字节: 11110xxx
+            else charLen = 1;                           // 无效字节，当作单字节
+
+            // 检查从 pos 开始的字符是否完整包含在 length 内
+            if (pos + charLen > length)
+                length = pos;
+        }
+
+        return length;
+    }
+
     private static bool InputTextUtf8(string id, ref string value, int maxLength, ImGuiInputTextFlags flags = ImGuiInputTextFlags.None)
     {
         if (maxLength <= 0)
@@ -2311,7 +2340,7 @@ internal sealed partial class PluginDockController : IDisposable
 
         var buffer = new byte[maxLength];
         var bytes = Encoding.UTF8.GetBytes(value ?? string.Empty);
-        var length = Math.Min(bytes.Length, maxLength - 1);
+        var length = GetValidUtf8Length(bytes, maxLength - 1);
         Array.Copy(bytes, buffer, length);
 
         var changed = ImGui.InputText(id, buffer, flags);
@@ -2333,7 +2362,7 @@ internal sealed partial class PluginDockController : IDisposable
 
         var buffer = new byte[maxLength];
         var bytes = Encoding.UTF8.GetBytes(value ?? string.Empty);
-        var length = Math.Min(bytes.Length, maxLength - 1);
+        var length = GetValidUtf8Length(bytes, maxLength - 1);
         Array.Copy(bytes, buffer, length);
 
         var changed = ImGui.InputTextMultiline(id, buffer, size, flags);
