@@ -12,6 +12,7 @@ internal class DService
 
     [PluginService] public static IDalamudPluginInterface PI { get; private set; } = null!;
     [PluginService] public static ICommandManager Command { get; private set; } = null!;
+    [PluginService] public static IChatGui Chat { get; private set; } = null!;
     [PluginService] public static IFramework Framework { get; private set; } = null!;
     [PluginService] public static IPluginLog Log { get; private set; } = null!;
     [PluginService] public static ITextureProvider Texture { get; private set; } = null!;

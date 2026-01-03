@@ -12,6 +12,7 @@ using Dalamud.Bindings.ImGui;
 using Dalamud.Configuration;
 using Dalamud.Game.Text;
 using Dalamud.Game.Command;
+using Dalamud.Game.Text.SeStringHandling;
 using Dalamud.Interface.ImGuiFileDialog;
 using Dalamud.Interface.Textures;
 using Dalamud.Interface.Windowing;
@@ -2690,6 +2691,8 @@ internal sealed partial class PluginDockController : IDisposable
                 SaveConfig(ModuleConfig);
             }
 
+            DrawDockItemContextMacrosEditor(item);
+
             var gameIconId = (int)item.CustomGameIconId;
             if (DrawDockIntInputWithPicker("游戏图标ID", "0=不用。优先级：游戏图标ID > 自定义图标路径 > 游戏图标字符(SeIconChar) > 插件默认图标。", "##dock_game_icon_id", ref gameIconId, "素材库", "##pick_game_icon",
                 () => OpenIconLibraryForDockItem(item, IconLibraryApplyField.GameIconId, IconLibraryMode.GameIcon)))
@@ -2719,6 +2722,57 @@ internal sealed partial class PluginDockController : IDisposable
             ImGui.PopID();
             ImGui.Separator();
         }
+    }
+
+    private void DrawDockItemContextMacrosEditor(DockItem item)
+    {
+        DrawDockLabelWithHelp("右键宏命令", "在该图标的右键菜单中显示的宏命令。名称可留空，菜单将显示命令文本。支持 /xxx 或 DService.Command.ProcessCommand(\"/xxx\")。");
+        ImGui.NewLine();
+        ImGui.Indent();
+
+        item.ContextMenuMacros ??= [];
+
+        for (var i = 0; i < item.ContextMenuMacros.Count; i++)
+        {
+            var macro = item.ContextMenuMacros[i];
+            ImGui.PushID(i);
+
+            ImGui.TextDisabled($"宏 {i + 1}");
+
+            var name = macro.Name ?? string.Empty;
+            if (DrawDockTextInputRow("名称", string.Empty, "##dock_macro_name", ref name, 128))
+            {
+                macro.Name = name.Trim();
+                SaveConfig(ModuleConfig);
+            }
+
+            var command = macro.Command ?? string.Empty;
+            if (DrawDockTextInputRow("命令", string.Empty, "##dock_macro_cmd", ref command, 260))
+            {
+                macro.Command = command.Trim();
+                SaveConfig(ModuleConfig);
+            }
+
+            if (ImGui.SmallButton("删除宏##dock_macro_remove"))
+            {
+                item.ContextMenuMacros.RemoveAt(i);
+                SaveConfig(ModuleConfig);
+                ImGui.PopID();
+                i--;
+                continue;
+            }
+
+            ImGui.PopID();
+            ImGui.Separator();
+        }
+
+        if (ImGui.SmallButton("新增宏命令##dock_macro_add"))
+        {
+            item.ContextMenuMacros.Add(new DockItemMacro());
+            SaveConfig(ModuleConfig);
+        }
+
+        ImGui.Unindent();
     }
 
     private void RemoveDockItemAtIndex(int index)
@@ -3232,6 +3286,40 @@ internal sealed partial class PluginDockController : IDisposable
         return clicked;
     }
 
+    private void DrawDockItemContextMacrosMenu(DockItem item, bool includeLeadingSeparator)
+    {
+        if (item.ContextMenuMacros == null || item.ContextMenuMacros.Count == 0)
+            return;
+
+        var hasEntries = false;
+        for (var i = 0; i < item.ContextMenuMacros.Count; i++)
+        {
+            var macro = item.ContextMenuMacros[i];
+            var command = (macro.Command ?? string.Empty).Trim();
+            if (command.Length == 0)
+                continue;
+
+            if (!hasEntries)
+            {
+                if (includeLeadingSeparator)
+                    ImGui.Separator();
+                ImGui.TextDisabled("宏命令");
+                hasEntries = true;
+            }
+
+            var name = (macro.Name ?? string.Empty).Trim();
+            var label = string.IsNullOrWhiteSpace(name) ? command : name;
+            if (ImGui.MenuItem($"{label}##dock_macro_{i}"))
+                TryExecuteClickCommand(command);
+
+            if (label != command && ImGui.IsItemHovered())
+                ImGui.SetTooltip(command);
+        }
+
+        if (hasEntries)
+            ImGui.Separator();
+    }
+
     private void DrawOneCommandDockItem(DockItem item)
     {
         var commandItemKey = item.InternalName?.Trim() ?? string.Empty;
@@ -3267,6 +3355,8 @@ internal sealed partial class PluginDockController : IDisposable
             if (ImGui.MenuItem("执行命令"))
                 TryExecuteClickCommand(item.ClickCommand);
             ImGui.EndDisabled();
+
+            DrawDockItemContextMacrosMenu(item, includeLeadingSeparator: true);
 
             if (ImGui.MenuItem("从收纳栏移除"))
             {
@@ -3322,6 +3412,8 @@ internal sealed partial class PluginDockController : IDisposable
                 TryOpenPlugin(plugin, preferConfig: true);
 
             ImGui.Separator();
+
+            DrawDockItemContextMacrosMenu(item, includeLeadingSeparator: false);
 
             if (ImGui.MenuItem("从收纳栏移除"))
             {
@@ -3576,6 +3668,8 @@ internal sealed partial class PluginDockController : IDisposable
 
             if (ImGui.MenuItem(permanentlyHidden ? "显示窗口" : "隐藏窗口"))
                 SetImGuiWindowHiddenByKey(windowName, hidden: !permanentlyHidden);
+
+            DrawDockItemContextMacrosMenu(item, includeLeadingSeparator: true);
 
             if (ImGui.MenuItem("从收纳中移除"))
             {
@@ -4441,13 +4535,46 @@ internal sealed partial class PluginDockController : IDisposable
     {
         try
         {
-            _ = DService.Command.ProcessCommand(normalized);
+            var handled = DService.Command.ProcessCommand(normalized);
+            if (!handled)
+                TryFallbackEchoCommand(normalized);
         }
         catch (Exception ex)
         {
             DService.Log.Error(ex, $"PluginDock 执行命令失败: {normalized}");
             HelpersOm.NotificationError($"执行命令失败: {normalized}");
         }
+    }
+
+    private static void TryFallbackEchoCommand(string command)
+    {
+        var text = (command ?? string.Empty).Trim();
+        if (text.Length == 0)
+            return;
+
+        if (text[0] == '\\')
+            text = "/" + text.Substring(1);
+
+        if (!text.StartsWith("/", StringComparison.Ordinal))
+            return;
+
+        var spaceIndex = text.IndexOf(' ');
+        var commandName = spaceIndex > 1 ? text.Substring(1, spaceIndex - 1) : text.Substring(1);
+        var args = spaceIndex > 0 && spaceIndex + 1 < text.Length ? text.Substring(spaceIndex + 1) : string.Empty;
+
+        if (!commandName.Equals("e", StringComparison.OrdinalIgnoreCase) &&
+            !commandName.Equals("echo", StringComparison.OrdinalIgnoreCase))
+            return;
+
+        if (args.Length == 0)
+            return;
+
+        var entry = new XivChatEntry
+        {
+            Type = XivChatType.Echo,
+            Message = new SeStringBuilder().AddText(args).Build(),
+        };
+        DService.Chat.Print(entry);
     }
 
     private static bool TryNormalizeClickCommand(string input, out string normalized, out string error)

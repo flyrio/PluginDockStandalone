@@ -103,8 +103,15 @@ internal sealed partial class PluginDockController
         public string? LinkedPluginInternalName;
         public bool PreferConfigUiOnClick;
         public string? ClickCommand;
+        public List<DockItemMacro> ContextMenuMacros = [];
         public bool ToggleOnClick;
         public string? ToggleTargetWindowName;
+    }
+
+    private sealed class DockItemMacro
+    {
+        public string Name = string.Empty;
+        public string Command = string.Empty;
     }
 
     private enum DockItemKind
