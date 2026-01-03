@@ -3309,12 +3309,8 @@ internal sealed partial class PluginDockController : IDisposable
 
             var name = (macro.Name ?? string.Empty).Trim();
             var displayName = SanitizeMacroDisplay(name, 40);
-            var displayCommand = SanitizeMacroDisplay(command, 60);
-            var label = string.IsNullOrWhiteSpace(displayName) ? displayCommand : displayName;
-            if (label.Length == 0)
-                label = "命令";
-            var shortcut = string.IsNullOrWhiteSpace(displayName) ? string.Empty : displayCommand;
-            if (ImGui.MenuItem($"{label}##dock_macro_{i}", shortcut))
+            var label = string.IsNullOrWhiteSpace(displayName) ? $"宏 {i + 1}" : displayName;
+            if (ImGui.MenuItem($"{label}##dock_macro_{i}"))
                 TryExecuteClickCommand(command);
         }
 
