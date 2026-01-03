@@ -3308,16 +3308,41 @@ internal sealed partial class PluginDockController : IDisposable
             }
 
             var name = (macro.Name ?? string.Empty).Trim();
-            var label = string.IsNullOrWhiteSpace(name) ? command : name;
-            if (ImGui.MenuItem($"{label}##dock_macro_{i}"))
+            var displayName = SanitizeMacroDisplay(name, 40);
+            var displayCommand = SanitizeMacroDisplay(command, 60);
+            var label = string.IsNullOrWhiteSpace(displayName) ? displayCommand : displayName;
+            if (label.Length == 0)
+                label = "命令";
+            var shortcut = string.IsNullOrWhiteSpace(displayName) ? string.Empty : displayCommand;
+            if (ImGui.MenuItem($"{label}##dock_macro_{i}", shortcut))
                 TryExecuteClickCommand(command);
-
-            if (label != command && ImGui.IsItemHovered())
-                ImGui.SetTooltip(command);
         }
 
         if (hasEntries)
             ImGui.Separator();
+    }
+
+    private static string SanitizeMacroDisplay(string input, int maxLength)
+    {
+        if (string.IsNullOrWhiteSpace(input) || maxLength <= 0)
+            return string.Empty;
+
+        var builder = new StringBuilder(input.Length);
+        foreach (var ch in input)
+        {
+            if (ch < ' ' || ch == '\u007f')
+                continue;
+
+            builder.Append(ch);
+            if (builder.Length >= maxLength)
+                break;
+        }
+
+        var result = builder.ToString().Trim();
+        if (builder.Length >= maxLength && maxLength > 3 && result.Length > maxLength - 3)
+            result = result.Substring(0, Math.Max(0, maxLength - 3)).TrimEnd() + "...";
+
+        return result;
     }
 
     private void DrawOneCommandDockItem(DockItem item)
