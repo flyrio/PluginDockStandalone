@@ -2334,6 +2334,15 @@ internal sealed partial class PluginDockController : IDisposable
         return length;
     }
 
+    private static string DecodeUtf8Buffer(byte[] buffer)
+    {
+        var length = Array.IndexOf(buffer, (byte)0);
+        if (length < 0)
+            length = buffer.Length;
+
+        return length <= 0 ? string.Empty : Encoding.UTF8.GetString(buffer, 0, length);
+    }
+
     private static bool InputTextUtf8(string id, ref string value, int maxLength, ImGuiInputTextFlags flags = ImGuiInputTextFlags.None)
     {
         if (maxLength <= 0)
@@ -2348,7 +2357,7 @@ internal sealed partial class PluginDockController : IDisposable
         if (!changed)
             return false;
 
-        var newValue = Encoding.UTF8.GetString(buffer).TrimEnd('\0');
+        var newValue = DecodeUtf8Buffer(buffer);
         if (newValue == value)
             return false;
 
@@ -2370,7 +2379,7 @@ internal sealed partial class PluginDockController : IDisposable
         if (!changed)
             return false;
 
-        var newValue = Encoding.UTF8.GetString(buffer).TrimEnd('\0');
+        var newValue = DecodeUtf8Buffer(buffer);
         if (newValue == value)
             return false;
 
@@ -2704,7 +2713,8 @@ internal sealed partial class PluginDockController : IDisposable
             var customIconPath = item.CustomIconPath ?? string.Empty;
             if (DrawDockTextInputRow("自定义图标路径", "可留空。支持绝对路径、相对路径（相对于本模块配置目录），或 dalamud:/sys: 前缀（从 Dalamud 资源目录读取）。", "##dock_custom_icon_path", ref customIconPath, 260))
             {
-                item.CustomIconPath = customIconPath.Trim();
+                var trimmed = customIconPath.Trim();
+                item.CustomIconPath = trimmed.Length == 0 ? null : trimmed;
                 if (!string.IsNullOrWhiteSpace(item.InternalName))
                     localIconPathCache.Remove(item.InternalName);
                 SaveConfig(ModuleConfig);
