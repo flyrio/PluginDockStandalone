@@ -26,6 +26,8 @@ internal sealed partial class PluginDockController : IDisposable
     private const string SmallIconSuffix = "-SmallIcon";
     private const string IconLibraryWindowKey = "###PluginDockStandalone.IconLibrary";
     private const string IconLibraryWindowName = "图标素材库" + IconLibraryWindowKey;
+    private static readonly string SelfImGuiWindowKeyPrefix =
+        IconLibraryWindowKey[..(IconLibraryWindowKey.LastIndexOf('.') + 1)];
     private static readonly Vector4 DockItemKindColorPlugin = new(0.45f, 0.85f, 0.55f, 1f);
     private static readonly Vector4 DockItemKindColorWindow = new(0.35f, 0.75f, 1.0f, 1f);
     private static readonly Vector4 DockItemKindColorCommand = new(1.0f, 0.75f, 0.25f, 1f);
@@ -44,6 +46,7 @@ internal sealed partial class PluginDockController : IDisposable
     private PluginDockConfigWindow? ConfigWindow;
     private bool initialized;
     private bool fileDialogActive;
+    private readonly string selfPluginInternalName;
 
     private string search = string.Empty;
     private bool showImGuiMetricsWindow;
@@ -115,6 +118,8 @@ internal sealed partial class PluginDockController : IDisposable
         ModuleConfig = LoadConfig() ?? new Config();
         ModuleConfig.HiddenImGuiWindowRestoreStates ??= new Dictionary<string, ImGuiWindowRestoreState>(StringComparer.OrdinalIgnoreCase);
         ModuleConfig.WindowHiderPresets ??= [];
+        selfPluginInternalName = ResolveSelfPluginInternalName();
+        SanitizeConfigForSelfProtection();
         EnsureOverlay();
         EnsureConfigWindow();
         ApplyOverlayState();
@@ -128,6 +133,73 @@ internal sealed partial class PluginDockController : IDisposable
         DService.PI.UiBuilder.OpenConfigUi += OpenConfigUi;
         DService.PI.UiBuilder.OpenMainUi += OpenMainUi;
         initialized = true;
+    }
+
+    private static string ResolveSelfPluginInternalName()
+    {
+        try
+        {
+            var pi = DService.PI;
+            var prop = pi.GetType().GetProperty("InternalName", BindingFlags.Public | BindingFlags.Instance);
+            var value = prop?.GetValue(pi) as string;
+            if (!string.IsNullOrWhiteSpace(value))
+                return value.Trim();
+        }
+        catch
+        {
+        }
+
+        return typeof(PluginDockController).Assembly.GetName().Name ?? "PluginDockStandalone";
+    }
+
+    private static bool IsSelfRelatedImGuiWindow(string? windowNameOrId)
+    {
+        if (string.IsNullOrWhiteSpace(windowNameOrId))
+            return false;
+
+        var key = NormalizeImGuiWindowNameKey(windowNameOrId);
+        return key.StartsWith(SelfImGuiWindowKeyPrefix, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private void SanitizeConfigForSelfProtection()
+    {
+        var changed = false;
+
+        if (!string.IsNullOrWhiteSpace(selfPluginInternalName))
+        {
+            var removed = ModuleConfig.Items.RemoveAll(x =>
+                x.Kind == DockItemKind.Plugin &&
+                x.InternalName.Equals(selfPluginInternalName, StringComparison.OrdinalIgnoreCase));
+            if (removed > 0)
+                changed = true;
+        }
+
+        var removedSelfWindows = ModuleConfig.Items.RemoveAll(x =>
+            x.Kind == DockItemKind.ImGuiWindow &&
+            IsSelfRelatedImGuiWindow(x.InternalName));
+        if (removedSelfWindows > 0)
+            changed = true;
+
+        if (ModuleConfig.HiddenImGuiWindows.Count > 0)
+        {
+            var removedHidden = ModuleConfig.HiddenImGuiWindows.RemoveAll(x => IsSelfRelatedImGuiWindow(x));
+            if (removedHidden > 0)
+                changed = true;
+        }
+
+        if (ModuleConfig.HiddenImGuiWindowRestoreStates.Count > 0)
+        {
+            foreach (var name in ModuleConfig.HiddenImGuiWindowRestoreStates.Keys.ToArray())
+            {
+                if (!IsSelfRelatedImGuiWindow(name))
+                    continue;
+                ModuleConfig.HiddenImGuiWindowRestoreStates.Remove(name);
+                changed = true;
+            }
+        }
+
+        if (changed)
+            SaveConfig(ModuleConfig);
     }
 
     public void Dispose()
@@ -581,6 +653,7 @@ internal sealed partial class PluginDockController : IDisposable
             ImGui.PushID(i);
 
             var isHidden = IsImGuiWindowHidden(name);
+            var isSelf = IsSelfRelatedImGuiWindow(name);
             if (isHidden)
                 ImGui.TextDisabled(name);
             else
@@ -593,12 +666,20 @@ internal sealed partial class PluginDockController : IDisposable
             }
 
             ImGui.SameLine();
+            ImGui.BeginDisabled(isSelf);
             if (ImGui.SmallButton(isHidden ? "显示" : "隐藏"))
                 SetImGuiWindowHidden(name, hidden: !isHidden);
+            ImGui.EndDisabled();
+            if (isSelf && ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
+                ImGui.SetTooltip("不能隐藏本插件自身或相关窗口");
 
             ImGui.SameLine();
+            ImGui.BeginDisabled(isSelf);
             if (ImGui.SmallButton("收纳##dock"))
                 AddDockItemForImGuiWindow(name);
+            ImGui.EndDisabled();
+            if (isSelf && ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
+                ImGui.SetTooltip("不能收纳本插件自身或相关窗口");
 
             ImGui.PopID();
         }
@@ -820,6 +901,9 @@ internal sealed partial class PluginDockController : IDisposable
             if (string.IsNullOrWhiteSpace(trimmed))
                 continue;
 
+            if (IsSelfRelatedImGuiWindow(trimmed))
+                continue;
+
             if (seen.Add(trimmed))
                 result.Add(trimmed);
 
@@ -963,8 +1047,8 @@ internal sealed partial class PluginDockController : IDisposable
                 return;
             }
 
-            SetImGuiWindowHidden(rest.Trim(), true);
-            HelpersOm.NotificationInfo($"已添加隐藏窗口: {rest.Trim()}");
+            if (SetImGuiWindowHidden(rest.Trim(), true))
+                HelpersOm.NotificationInfo($"已添加隐藏窗口: {rest.Trim()}");
             return;
         }
 
@@ -977,8 +1061,8 @@ internal sealed partial class PluginDockController : IDisposable
                 return;
             }
 
-            SetImGuiWindowHidden(rest.Trim(), false);
-            HelpersOm.NotificationInfo($"已移除隐藏窗口: {rest.Trim()}");
+            if (SetImGuiWindowHidden(rest.Trim(), false))
+                HelpersOm.NotificationInfo($"已移除隐藏窗口: {rest.Trim()}");
             return;
         }
 
@@ -1294,6 +1378,12 @@ internal sealed partial class PluginDockController : IDisposable
         if (trimmed.Length == 0)
             return;
 
+        if (hidden && IsSelfRelatedImGuiWindow(trimmed))
+        {
+            HelpersOm.NotificationError("不能隐藏本插件自身或相关窗口");
+            return;
+        }
+
         if (hidden)
         {
             if (transientHiddenImGuiWindows.Add(trimmed))
@@ -1323,12 +1413,18 @@ internal sealed partial class PluginDockController : IDisposable
         QueueImGuiWindowFocus(trimmed, frames: 45);
     }
 
-    private void SetImGuiWindowHidden(string name, bool hidden, bool save = true)
+    private bool SetImGuiWindowHidden(string name, bool hidden, bool save = true)
     {
         if (string.IsNullOrWhiteSpace(name))
-            return;
+            return false;
 
         var trimmed = name.Trim();
+        if (hidden && IsSelfRelatedImGuiWindow(trimmed))
+        {
+            HelpersOm.NotificationError("不能隐藏本插件自身或相关窗口");
+            return false;
+        }
+
         var existingIndex = ModuleConfig.HiddenImGuiWindows.FindIndex(x => x.Equals(trimmed, StringComparison.OrdinalIgnoreCase));
 
         if (hidden)
@@ -1374,6 +1470,8 @@ internal sealed partial class PluginDockController : IDisposable
 
         if (save)
             SaveConfig(ModuleConfig);
+
+        return true;
     }
 
     private void SetImGuiWindowHiddenByKey(string windowNameOrId, bool hidden, bool save = true)
@@ -1382,6 +1480,12 @@ internal sealed partial class PluginDockController : IDisposable
             return;
 
         var trimmed = windowNameOrId.Trim();
+        if (hidden && IsSelfRelatedImGuiWindow(trimmed))
+        {
+            HelpersOm.NotificationError("不能隐藏本插件自身或相关窗口");
+            return;
+        }
+
         var key = NormalizeImGuiWindowNameKey(trimmed);
         if (key.Length == 0)
             return;
@@ -1443,6 +1547,12 @@ internal sealed partial class PluginDockController : IDisposable
             return;
 
         var trimmed = windowName.Trim();
+        if (IsSelfRelatedImGuiWindow(trimmed))
+        {
+            HelpersOm.NotificationError("不能收纳本插件自身或相关窗口");
+            return;
+        }
+
         var exists = ModuleConfig.Items.Any(x =>
             x.Kind == DockItemKind.ImGuiWindow &&
             x.InternalName.Equals(trimmed, StringComparison.OrdinalIgnoreCase));
@@ -2286,6 +2396,12 @@ internal sealed partial class PluginDockController : IDisposable
         try
         {
             var plugins = GetLoadedPlugins();
+            if (!string.IsNullOrWhiteSpace(selfPluginInternalName))
+            {
+                plugins = plugins
+                    .Where(p => !p.InternalName.Equals(selfPluginInternalName, StringComparison.OrdinalIgnoreCase))
+                    .ToList();
+            }
             loadedPluginsCache = plugins;
             loadedPluginByInternalNameCache = plugins.ToDictionary(p => p.InternalName, StringComparer.OrdinalIgnoreCase);
         }
@@ -2889,6 +3005,10 @@ internal sealed partial class PluginDockController : IDisposable
 
         foreach (var plugin in plugins)
         {
+            if (!string.IsNullOrWhiteSpace(selfPluginInternalName) &&
+                plugin.InternalName.Equals(selfPluginInternalName, StringComparison.OrdinalIgnoreCase))
+                continue;
+
             if (!string.IsNullOrWhiteSpace(filter))
             {
                 if (!plugin.Name.Contains(filter, StringComparison.OrdinalIgnoreCase) &&
@@ -3005,6 +3125,9 @@ internal sealed partial class PluginDockController : IDisposable
                 {
                     if (!string.IsNullOrWhiteSpace(item.InternalName))
                     {
+                        if (IsSelfRelatedImGuiWindow(item.InternalName))
+                            continue;
+
                         var linked = item.LinkedPluginInternalName ?? string.Empty;
                         var linkedPlugin = !string.IsNullOrWhiteSpace(linked) && pluginByInternalName.TryGetValue(linked, out var linkedValue)
                             ? linkedValue
