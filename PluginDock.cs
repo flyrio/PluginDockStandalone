@@ -43,6 +43,7 @@ internal sealed partial class PluginDockController : IDisposable
     private DockOverlayWindow? Overlay;
     private PluginDockConfigWindow? ConfigWindow;
     private bool initialized;
+    private bool fileDialogActive;
 
     private string search = string.Empty;
     private bool showImGuiMetricsWindow;
@@ -75,6 +76,12 @@ internal sealed partial class PluginDockController : IDisposable
     private bool dockDragMoved;
     private Vector2 dockDragStartMouse;
     private Vector2 dockDragStartAnchor;
+
+    private readonly List<(DockItem Item, IExposedPlugin? Plugin)> visibleDockItemsScratch = [];
+
+    private long loadedPluginsCacheNextRefreshAtTick;
+    private List<IExposedPlugin> loadedPluginsCache = [];
+    private Dictionary<string, IExposedPlugin> loadedPluginByInternalNameCache = new(StringComparer.OrdinalIgnoreCase);
 
     private readonly Dictionary<string, string> localIconPathCache = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, Task> iconDownloadTasks = new(StringComparer.OrdinalIgnoreCase);
@@ -324,7 +331,7 @@ internal sealed partial class PluginDockController : IDisposable
 
         if (ImGui.CollapsingHeader("收纳内容", ImGuiTreeNodeFlags.DefaultOpen))
         {
-            var loadedPlugins = GetLoadedPlugins();
+            var loadedPlugins = GetLoadedPluginsCached();
             var uiPlugins = loadedPlugins.Where(p => p.HasMainUi || p.HasConfigUi).ToList();
             if (uiPlugins.Count == 0)
                 ImGui.TextDisabled("未找到可打开主界面/设置的已加载插件（仍可编辑已收纳的“窗口”条目）。");
@@ -1104,7 +1111,8 @@ internal sealed partial class PluginDockController : IDisposable
             ApplyPendingImGuiWindowFocusRequests();
             DrawImGuiMetricsWindow();
             DrawIconLibraryWindow();
-            fileDialogManager.Draw();
+            if (fileDialogActive)
+                fileDialogManager.Draw();
         }
         catch (Exception ex)
         {
@@ -1149,50 +1157,38 @@ internal sealed partial class PluginDockController : IDisposable
 
     private void ApplyHiddenImGuiWindows()
     {
-        if (!ModuleConfig.WindowHiderEnabled && transientHiddenImGuiWindows.Count == 0)
+        var hasHardHidden = ModuleConfig.WindowHiderEnabled && ModuleConfig.HiddenImGuiWindows.Count > 0;
+        var hasTransientHidden = transientHiddenImGuiWindows.Count > 0;
+
+        if (!hasHardHidden && !hasTransientHidden)
             return;
 
         UpdateForcedVisibleImGuiWindowKeys();
 
         hardHiddenImGuiWindowKeysScratch.Clear();
-        var offscreen = new Vector2(-100_000f, -100_000f);
 
-        void HideWindow(string name)
-        {
-            if (string.IsNullOrWhiteSpace(name))
-                return;
-
-            try
-            {
-                ImGui.SetWindowCollapsed(name, true, ImGuiCond.Always);
-                ImGui.SetWindowPos(name, offscreen, ImGuiCond.Always);
-            }
-            catch
-            {
-            }
-        }
-
-        if (ModuleConfig.WindowHiderEnabled)
+        if (hasHardHidden)
         {
             foreach (var name in ModuleConfig.HiddenImGuiWindows)
             {
                 if (IsImGuiWindowForceVisible(name))
                     continue;
-                HideWindow(name);
                 var key = GetImGuiWindowNameKeyCached(name);
                 if (key.Length > 0)
                     hardHiddenImGuiWindowKeysScratch.Add(key);
             }
         }
 
-        foreach (var name in transientHiddenImGuiWindows.ToArray())
+        if (hasTransientHidden)
         {
-            if (IsImGuiWindowForceVisible(name))
-                continue;
-            HideWindow(name);
-            var key = GetImGuiWindowNameKeyCached(name);
-            if (key.Length > 0)
-                hardHiddenImGuiWindowKeysScratch.Add(key);
+            foreach (var name in transientHiddenImGuiWindows)
+            {
+                if (IsImGuiWindowForceVisible(name))
+                    continue;
+                var key = GetImGuiWindowNameKeyCached(name);
+                if (key.Length > 0)
+                    hardHiddenImGuiWindowKeysScratch.Add(key);
+            }
         }
 
         ApplyHardHiddenImGuiWindowsByKeys(hardHiddenImGuiWindowKeysScratch);
@@ -1508,7 +1504,7 @@ internal sealed partial class PluginDockController : IDisposable
         if (string.IsNullOrWhiteSpace(windowName))
             return null;
 
-        var plugins = GetLoadedPlugins();
+        var plugins = GetLoadedPluginsCached();
         if (plugins.Count == 0)
             return null;
 
@@ -2279,6 +2275,39 @@ internal sealed partial class PluginDockController : IDisposable
         SaveConfig(ModuleConfig);
     }
 
+    private void EnsureLoadedPluginsCache()
+    {
+        var now = Environment.TickCount64;
+        if (now < loadedPluginsCacheNextRefreshAtTick)
+            return;
+
+        loadedPluginsCacheNextRefreshAtTick = now + 1000;
+
+        try
+        {
+            var plugins = GetLoadedPlugins();
+            loadedPluginsCache = plugins;
+            loadedPluginByInternalNameCache = plugins.ToDictionary(p => p.InternalName, StringComparer.OrdinalIgnoreCase);
+        }
+        catch
+        {
+            loadedPluginsCache = [];
+            loadedPluginByInternalNameCache = new Dictionary<string, IExposedPlugin>(StringComparer.OrdinalIgnoreCase);
+        }
+    }
+
+    private IReadOnlyList<IExposedPlugin> GetLoadedPluginsCached()
+    {
+        EnsureLoadedPluginsCache();
+        return loadedPluginsCache;
+    }
+
+    private Dictionary<string, IExposedPlugin> GetLoadedPluginByInternalNameCached()
+    {
+        EnsureLoadedPluginsCache();
+        return loadedPluginByInternalNameCache;
+    }
+
     private static List<IExposedPlugin> GetLoadedPlugins() =>
         DService.PI.InstalledPlugins
             .Where(p => p.IsLoaded)
@@ -2438,11 +2467,13 @@ internal sealed partial class PluginDockController : IDisposable
     private void OpenDockHeaderIconPicker()
     {
         var startPath = ResolveDockHeaderIconPickerStartPath();
+        fileDialogActive = true;
         fileDialogManager.OpenFileDialog(
             "选择悬浮窗图标",
             "图片{.png,.jpg,.jpeg}",
             (success, paths) =>
             {
+                fileDialogActive = false;
                 if (!success || paths.Count == 0)
                     return;
 
@@ -2959,13 +2990,13 @@ internal sealed partial class PluginDockController : IDisposable
         var spacing = ModuleConfig.IconSpacing;
 
         var shift = Vector2.Zero;
-        var visibleDockItems = new List<(DockItem Item, IExposedPlugin? Plugin)>();
+        var visibleDockItems = visibleDockItemsScratch;
+        visibleDockItems.Clear();
         var showPlaceholder = false;
 
         if (!ModuleConfig.Collapsed)
         {
-            var plugins = GetLoadedPlugins();
-            var pluginByInternalName = plugins.ToDictionary(p => p.InternalName, StringComparer.OrdinalIgnoreCase);
+            var pluginByInternalName = GetLoadedPluginByInternalNameCached();
 
             foreach (var item in ModuleConfig.Items)
             {
@@ -4128,14 +4159,17 @@ internal sealed partial class PluginDockController : IDisposable
         var customPath = ModuleConfig.DockHeaderIconPath?.Trim() ?? string.Empty;
         if (customPath.Length > 0)
         {
-            if (Path.IsPathRooted(customPath) && File.Exists(customPath))
+            if (Path.IsPathRooted(customPath))
             {
                 if (textureCache.TryGetValue(customPath, out var cached))
                     return cached;
 
-                var texture = DService.Texture.GetFromFileAbsolute(customPath);
-                textureCache[customPath] = texture;
-                return texture;
+                if (File.Exists(customPath))
+                {
+                    var texture = DService.Texture.GetFromFileAbsolute(customPath);
+                    textureCache[customPath] = texture;
+                    return texture;
+                }
             }
         }
 
@@ -4149,11 +4183,14 @@ internal sealed partial class PluginDockController : IDisposable
             return gameIcon;
 
         var resolvedPath = ResolveCustomIconPath(item.CustomIconPath);
-        if (string.IsNullOrWhiteSpace(resolvedPath) || !Path.IsPathRooted(resolvedPath) || !File.Exists(resolvedPath))
+        if (string.IsNullOrWhiteSpace(resolvedPath) || !Path.IsPathRooted(resolvedPath))
             return GetFallbackPluginIcon();
 
         if (textureCache.TryGetValue(resolvedPath, out var cached))
             return cached;
+
+        if (!File.Exists(resolvedPath))
+            return GetFallbackPluginIcon();
 
         var texture = DService.Texture.GetFromFileAbsolute(resolvedPath);
         textureCache[resolvedPath] = texture;
@@ -4174,11 +4211,14 @@ internal sealed partial class PluginDockController : IDisposable
         }
 
         var resolvedPath = ResolveIconPathForImGuiWindow(item);
-        if (string.IsNullOrWhiteSpace(resolvedPath) || !Path.IsPathRooted(resolvedPath) || !File.Exists(resolvedPath))
+        if (string.IsNullOrWhiteSpace(resolvedPath) || !Path.IsPathRooted(resolvedPath))
             return GetFallbackPluginIcon();
 
         if (textureCache.TryGetValue(resolvedPath, out var cached))
             return cached;
+
+        if (!File.Exists(resolvedPath))
+            return GetFallbackPluginIcon();
 
         var texture = DService.Texture.GetFromFileAbsolute(resolvedPath);
         textureCache[resolvedPath] = texture;
@@ -4217,11 +4257,14 @@ internal sealed partial class PluginDockController : IDisposable
             return gameIcon;
 
         var resolvedPath = ResolveIconPath(plugin, item);
-        if (string.IsNullOrWhiteSpace(resolvedPath) || !Path.IsPathRooted(resolvedPath) || !File.Exists(resolvedPath))
+        if (string.IsNullOrWhiteSpace(resolvedPath) || !Path.IsPathRooted(resolvedPath))
             return GetFallbackPluginIcon();
 
         if (textureCache.TryGetValue(resolvedPath, out var cached))
             return cached;
+
+        if (!File.Exists(resolvedPath))
+            return GetFallbackPluginIcon();
 
         var texture = DService.Texture.GetFromFileAbsolute(resolvedPath);
         textureCache[resolvedPath] = texture;
