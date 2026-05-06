@@ -3636,7 +3636,7 @@ internal sealed partial class PluginDockController : IDisposable
 
         var toggleTargetWindowName = hasConfiguredToggleTarget ? configuredToggleTarget : windowName;
         var autoSmallIconTarget = false;
-        Window? windowManagerToggleTarget = null;
+        IWindow? windowManagerToggleTarget = null;
 
         if (item.ToggleOnClick && !hasConfiguredToggleTarget &&
             windowName.EndsWith(SmallIconSuffix, StringComparison.OrdinalIgnoreCase) &&
@@ -3769,7 +3769,7 @@ internal sealed partial class PluginDockController : IDisposable
             else
             {
                 var key = NormalizeImGuiWindowNameKey(windowName);
-                Window? windowManagerWindow = null;
+                IWindow? windowManagerWindow = null;
                 if (TryGetWindowManagerWindow(windowName, out var wmWindow))
                 {
                     windowManagerWindow = wmWindow;
@@ -4105,7 +4105,7 @@ internal sealed partial class PluginDockController : IDisposable
         }
     }
 
-    private bool TryGetWindowManagerWindow(string windowNameOrId, out Window window)
+    private bool TryGetWindowManagerWindow(string windowNameOrId, out IWindow window)
     {
         if (TryGetWindowFromSystem(windowSystem, windowNameOrId, out window))
             return true;
@@ -4114,7 +4114,7 @@ internal sealed partial class PluginDockController : IDisposable
         return dailySystem != null && TryGetWindowFromSystem(dailySystem, windowNameOrId, out window);
     }
 
-    private static bool TryGetWindowFromSystem(WindowSystem system, string windowNameOrId, out Window window)
+    private static bool TryGetWindowFromSystem(WindowSystem system, string windowNameOrId, out IWindow window)
     {
         window = null!;
 
@@ -4201,7 +4201,7 @@ internal sealed partial class PluginDockController : IDisposable
         }
     }
 
-    private bool TryResolveDailyRoutinesSmallIconTarget(string smallIconWindowName, out Window window)
+    private bool TryResolveDailyRoutinesSmallIconTarget(string smallIconWindowName, out IWindow window)
     {
         window = null!;
 
